@@ -1,0 +1,37 @@
+ROTATION ANNOTATOR — METHODOLOGY
+==================================
+
+OVERVIEW
+--------
+We built a Flask-based annotation tool that lets you click the center of three
+known sockets (VGA, Ethernet, Power) across multiple frames. From these 2D pixel
+clicks, it triangulates the 3D world-space position of each socket center, then
+constructs the panel rotation matrix.
+
+TRIANGULATION
+-------------
+For each socket, you click its center on at least 2 frames. Each click gives a
+2D pixel coordinate (u, v) on a known camera pose. Using the camera intrinsics K
+and the pose for each frame, we build a linear system (DLT) and solve it with SVD
+to recover the 3D world position of that socket.
+
+ROTATION MATRIX CONSTRUCTION
+------------------------------
+With three triangulated points — VGA (p_vga), Ethernet (p_eth), Power (p_pwr) —
+we define the panel's local coordinate axes as follows:
+
+  x (panel up / vertical axis)   = normalize(p_pwr - p_eth)
+  y (panel right / horizontal)   = normalize(p_eth - p_vga)
+  z (panel outward normal)       = normalize(x cross y)
+
+We then re-orthogonalise using Gram-Schmidt (y = z cross x) to ensure a clean
+right-handed coordinate frame, and try all 4 sign combinations of (x, y) to
+select the one that produces a geometrically consistent outward-facing normal.
+
+The final rotation matrix R = [x | y | z] (columns) maps from panel-local space
+to world space.
+
+RESULT
+------
+  Similarity score : 0.2652  (Frobenius distance from reference, lower is better)
+  Visual validation: computed OBB and reference OBB overlap closely on the socket
