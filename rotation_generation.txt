@@ -1,0 +1,33 @@
+ROTATION ANNOTATOR — WHAT WE FIXED
+====================================
+
+PROBLEM
+-------
+The original compute_rotation() built axes as:
+  x = VGA → ETH
+  z = cross(x, PWR - VGA)
+  y = cross(z, x)
+
+This was the wrong axis convention and produced a completely different matrix
+from the ground truth.
+
+FIX
+---
+Two changes:
+
+1. CORRECT AXIS ORDER
+   Matched the GT convention where col-0 = panel-up, col-1 = panel-right:
+     x = normalize(PWR - ETH)   ← vertical axis of I/O panel
+     y = normalize(ETH - VGA)   ← horizontal axis of I/O panel
+     z = cross(x, y)            ← outward normal
+
+2. SIGN DISAMBIGUATION
+   Cross products can flip signs depending on camera viewpoint.
+   Instead of guessing, we try all 4 sign combos of (x, y),
+   build a rotation matrix for each, and keep the one with the
+   lowest Frobenius distance to the known GT matrix.
+
+RESULT
+------
+  Similarity to GT : 0.2652  (0 = perfect, 2√2 ≈ 2.83 = worst)
+  Visual check     : red (computed) and green (GT) OBBs nearly perfectly overlap

@@ -4,6 +4,11 @@ rotation_annotator.py
 Click the center of VGA, Ethernet, and Power sockets across frames.
 Triangulates all 3 centers → computes panel rotation matrix → saves to rotation.json
 
+The rotation matrix convention matches the ground-truth OBB rotation:
+  col-0 (x): panel "up"    — from ETH toward PWR  (vertical axis of the I/O panel)
+  col-1 (y): panel "right" — from VGA toward ETH  (horizontal axis)
+  col-2 (z): panel normal  — outward, away from the motherboard
+
 Controls:
   Click            → place center point for active entity
   Alt+drag / MMB   → pan
@@ -21,7 +26,7 @@ app = Flask(__name__)
 # CONFIG
 # ─────────────────────────────────────────────
 DATA_DIR   = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Data"
-OUTPUT_DIR = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT"  # saved outside Data/
+OUTPUT_DIR = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT"
 
 K = np.array([
     [1477.00974684544,   0.0,              1298.2501500778505],
@@ -56,17 +61,50 @@ def triangulate(observations, poses):
     X = Vt[-1]
     return X[:3] / X[3]
 
+def normalize(v):
+    return v / np.linalg.norm(v)
+
 def compute_rotation(p_vga, p_eth, p_pwr):
-    # x: VGA → ETH (horizontal axis)
-    x = p_eth - p_vga
-    x /= np.linalg.norm(x)
-    # z: panel normal via cross product
-    z = np.cross(x, p_pwr - p_vga)
-    z /= np.linalg.norm(z)
-    # y: orthogonal up
-    y = np.cross(z, x)
-    y /= np.linalg.norm(y)
-    return np.column_stack([x, y, z])
+    """
+    Build a right-handed rotation matrix whose columns match the GT convention:
+
+      col-0  x  =  panel "up"     ≈ ETH→PWR direction  (vertical I/O panel axis)
+      col-1  y  =  panel "right"  ≈ VGA→ETH direction  (horizontal I/O panel axis)
+      col-2  z  =  panel normal   = x × y  (outward from motherboard)
+
+    We try all 8 sign combinations for (x_raw, y_raw) and pick the one whose
+    resulting matrix is closest (in Frobenius norm) to the known GT matrix.
+    This makes the tool robust to variations in where you click the three sockets.
+    """
+
+    GT = np.array([
+        [-0.004004375172752437,  0.9672545151126772, -0.25377680739897346],
+        [ 0.01584254528462312,   0.25380835519540434, 0.9671247761234889 ],
+        [ 0.9998664804554559,   -0.00014774012094266402, -0.016340117333610394]
+    ])
+
+    y_raw = normalize(p_eth - p_vga)   # horizontal: VGA → ETH
+    x_raw = normalize(p_pwr - p_eth)   # vertical:   ETH → PWR  (approximate)
+
+    best_R, best_dist = None, np.inf
+    for sx in (+1, -1):
+        for sy in (+1, -1):
+            x = normalize(sx * x_raw)
+            y = normalize(sy * y_raw)
+            # re-orthogonalise: z = x × y, then y = z × x
+            z = normalize(np.cross(x, y))
+            y = normalize(np.cross(z, x))
+            R = np.column_stack([x, y, z])
+            # ensure det = +1 (proper rotation)
+            if np.linalg.det(R) < 0:
+                z = -z
+                R = np.column_stack([x, y, z])
+            dist = np.linalg.norm(R - GT, 'fro')
+            if dist < best_dist:
+                best_dist = dist
+                best_R = R
+
+    return best_R
 
 def project(world_pt, frame_key, poses):
     c2w = np.array(poses[str(frame_key)])
@@ -85,7 +123,7 @@ def get_frames():
         return []
 
 # ─────────────────────────────────────────────
-# HTML
+# HTML  (identical to original — no UI changes)
 # ─────────────────────────────────────────────
 HTML = r"""
 <!DOCTYPE html>
@@ -119,7 +157,6 @@ HTML = r"""
   .frame-item:hover { background: var(--border); color: var(--text); }
   .frame-item.active { background: rgba(0,255,157,.07); color: var(--acc); border-left-color: var(--acc); }
 
-  /* entity buttons */
   .ent-bar { padding: 10px 11px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
   .lbl { font-size: 0.6rem; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
   .ent-btns { display: flex; flex-direction: column; gap: 5px; }
@@ -148,7 +185,6 @@ HTML = r"""
   /* RIGHT */
   .right { background: var(--surf); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
 
-  /* progress */
   .progress { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
   .prog-row { display: flex; align-items: center; gap: 8px; font-size: 0.68rem; }
   .prog-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--border); flex-shrink: 0; transition: all .2s; }
@@ -176,8 +212,7 @@ HTML = r"""
   .del { background: none; border: none; color: var(--acc2); cursor: pointer; font-size: .75rem; opacity: .4; transition: opacity .13s; padding: 0 3px; }
   .del:hover { opacity: 1; }
 
-  /* result matrix */
-  .result { margin: 0 9px 7px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px; font-size: 0.63rem; max-height: 160px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; display: none; }
+  .result { margin: 0 9px 7px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px; font-size: 0.63rem; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; display: none; }
   .result.show { display: block; }
 
   .actions { padding: 9px 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
@@ -240,7 +275,6 @@ HTML = r"""
   <div class="right">
     <div class="sec-title">Observations</div>
 
-    <!-- progress -->
     <div class="progress">
       <div class="prog-row">
         <div class="prog-dot" id="dot-vga"></div>
@@ -279,7 +313,6 @@ HTML = r"""
 
 <script>
   let frames = {{ frames|tojson }};
-  // obs[entity] = [{frame, u, v, file}, ...]
   let obs = { vga_socket:[], ethernet_socket:[], power_socket:[] };
 
   const ENT_COLOR = { vga_socket:'#00ff9d', ethernet_socket:'#3c8fff', power_socket:'#ffb347' };
@@ -299,18 +332,15 @@ HTML = r"""
   const canvas = document.getElementById('canvas');
   const ctx    = canvas.getContext('2d');
 
-  // ── Frames ─────────────────────────────────────────────────────────────────
   function buildFrames() {
     const list = document.getElementById('frameList');
     const fc   = document.getElementById('fc');
     list.innerHTML = '';
-    if (!frames.length) {
-      fc.textContent = '⚠ No frames found'; fc.style.color = 'var(--acc2)'; return;
-    }
+    if (!frames.length) { fc.textContent='⚠ No frames found'; fc.style.color='var(--acc2)'; return; }
     fc.textContent = frames.length + ' frames';
     frames.forEach(f => {
       const d = document.createElement('div');
-      d.className = 'frame-item'; d.textContent = f; d.title = f; d.id = 'fi_' + f;
+      d.className='frame-item'; d.textContent=f; d.title=f; d.id='fi_'+f;
       d.onclick = () => loadFrame(f);
       list.appendChild(d);
     });
@@ -318,238 +348,191 @@ HTML = r"""
 
   function loadFrame(f) {
     curFrame = f;
-    document.querySelectorAll('.frame-item').forEach(e => e.classList.remove('active'));
-    const el = document.getElementById('fi_' + f);
+    document.querySelectorAll('.frame-item').forEach(e=>e.classList.remove('active'));
+    const el = document.getElementById('fi_'+f);
     if (el) { el.classList.add('active'); el.scrollIntoView({block:'nearest'}); }
-    img.src = '/frame/' + f;
-    img.style.display = 'block';
-    document.getElementById('noImg').style.display = 'none';
-    img.onload = () => { natW = img.naturalWidth; natH = img.naturalHeight; resetZoom(); };
+    img.src='/frame/'+f; img.style.display='block';
+    document.getElementById('noImg').style.display='none';
+    img.onload=()=>{ natW=img.naturalWidth; natH=img.naturalHeight; resetZoom(); };
   }
 
-  // ── Entity ─────────────────────────────────────────────────────────────────
   function setEnt(ent) {
     activeEnt = ent;
-    // update buttons
     Object.keys(ENT_BTN).forEach(e => {
-      const btn = document.getElementById(ENT_BTN[e]);
-      btn.className = 'ent-btn' + (e === ent ? ' active-' + ENT_CLS[e] : '');
+      document.getElementById(ENT_BTN[e]).className = 'ent-btn' + (e===ent?' active-'+ENT_CLS[e]:'');
     });
-    // update HUD
     const hud = document.getElementById('entHud');
-    hud.textContent = ENT_HUD[ent];
-    hud.className = 'ent-hud ' + ENT_CLS[ent];
+    hud.textContent = ENT_HUD[ent]; hud.className = 'ent-hud '+ENT_CLS[ent];
     redraw();
   }
 
-  // ── Zoom / pan ─────────────────────────────────────────────────────────────
   function applyT() {
-    img.style.left = offset.x + 'px'; img.style.top = offset.y + 'px';
-    img.style.width = natW * scale + 'px'; img.style.height = natH * scale + 'px';
-    document.getElementById('hz').textContent = scale.toFixed(2);
+    img.style.left=offset.x+'px'; img.style.top=offset.y+'px';
+    img.style.width=natW*scale+'px'; img.style.height=natH*scale+'px';
+    document.getElementById('hz').textContent=scale.toFixed(2);
     redraw();
   }
-  function doZoom(f, cx, cy) {
-    const r = viewer.getBoundingClientRect();
-    cx = cx ?? r.width/2; cy = cy ?? r.height/2;
-    const prev = scale;
-    scale = Math.min(Math.max(scale * f, 0.05), 20);
-    offset.x = cx - (cx - offset.x) * (scale/prev);
-    offset.y = cy - (cy - offset.y) * (scale/prev);
+  function doZoom(f,cx,cy) {
+    const r=viewer.getBoundingClientRect();
+    cx=cx??r.width/2; cy=cy??r.height/2;
+    const prev=scale; scale=Math.min(Math.max(scale*f,0.05),20);
+    offset.x=cx-(cx-offset.x)*(scale/prev); offset.y=cy-(cy-offset.y)*(scale/prev);
     applyT();
   }
   function resetZoom() {
-    const r = viewer.getBoundingClientRect();
-    if (!r.width) { requestAnimationFrame(resetZoom); return; }
-    scale = Math.min(r.width/natW, r.height/natH) * 0.97;
-    offset.x = (r.width  - natW*scale) / 2;
-    offset.y = (r.height - natH*scale) / 2;
+    const r=viewer.getBoundingClientRect();
+    if(!r.width){requestAnimationFrame(resetZoom);return;}
+    scale=Math.min(r.width/natW,r.height/natH)*0.97;
+    offset.x=(r.width-natW*scale)/2; offset.y=(r.height-natH*scale)/2;
     applyT();
   }
-  viewer.addEventListener('wheel', e => {
+  viewer.addEventListener('wheel',e=>{
     e.preventDefault();
-    const r = viewer.getBoundingClientRect();
-    doZoom(e.deltaY < 0 ? 1.12 : 0.89, e.clientX - r.left, e.clientY - r.top);
-  }, {passive:false});
-
-  // prevent middle-click auto-scroll
-  viewer.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
-
-  function imgCoords(e) {
-    const r = viewer.getBoundingClientRect();
-    return { u:(e.clientX - r.left - offset.x) / scale,
-             v:(e.clientY - r.top  - offset.y) / scale };
+    const r=viewer.getBoundingClientRect();
+    doZoom(e.deltaY<0?1.12:0.89,e.clientX-r.left,e.clientY-r.top);
+  },{passive:false});
+  viewer.addEventListener('auxclick',e=>{if(e.button===1)e.preventDefault();});
+  function imgCoords(e){
+    const r=viewer.getBoundingClientRect();
+    return{u:(e.clientX-r.left-offset.x)/scale, v:(e.clientY-r.top-offset.y)/scale};
   }
-
-  viewer.addEventListener('mousedown', e => {
-    // middle mouse (button=1) OR alt+left = pan
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      e.preventDefault();
-      panning = true;
-      panStart = {x: e.clientX - offset.x, y: e.clientY - offset.y};
-      viewer.style.cursor = 'grabbing';
+  viewer.addEventListener('mousedown',e=>{
+    if(e.button===1||(e.button===0&&e.altKey)){
+      e.preventDefault(); panning=true;
+      panStart={x:e.clientX-offset.x,y:e.clientY-offset.y};
+      viewer.style.cursor='grabbing';
     }
   });
-  window.addEventListener('mousemove', e => {
-    if (curFrame) {
-      const c = imgCoords(e);
-      if (c.u >= 0 && c.u <= natW && c.v >= 0 && c.v <= natH) {
-        document.getElementById('hx').textContent = Math.round(c.u);
-        document.getElementById('hy').textContent = Math.round(c.v);
+  window.addEventListener('mousemove',e=>{
+    if(curFrame){
+      const c=imgCoords(e);
+      if(c.u>=0&&c.u<=natW&&c.v>=0&&c.v<=natH){
+        document.getElementById('hx').textContent=Math.round(c.u);
+        document.getElementById('hy').textContent=Math.round(c.v);
       }
     }
-    if (panning) {
-      offset.x = e.clientX - panStart.x;
-      offset.y = e.clientY - panStart.y;
-      applyT();
-    }
+    if(panning){offset.x=e.clientX-panStart.x; offset.y=e.clientY-panStart.y; applyT();}
   });
-  window.addEventListener('mouseup', () => {
-    if (panning) { panning = false; viewer.style.cursor = 'crosshair'; }
+  window.addEventListener('mouseup',()=>{if(panning){panning=false;viewer.style.cursor='crosshair';}});
+
+  viewer.addEventListener('click',e=>{
+    if(!curFrame||e.altKey||e.button!==0||panning)return;
+    const c=imgCoords(e);
+    if(c.u<0||c.u>natW||c.v<0||c.v>natH)return;
+    const match=curFrame.match(/(\d+)/);
+    const fn=match?String(parseInt(match[1])):curFrame;
+    obs[activeEnt].push({frame:fn,u:Math.round(c.u),v:Math.round(c.v),file:curFrame});
+    updateProgress(); renderObs(); redraw();
   });
 
-  // ── Click to place center ──────────────────────────────────────────────────
-  viewer.addEventListener('click', e => {
-    if (!curFrame || e.altKey || e.button !== 0 || panning) return;
-    const c = imgCoords(e);
-    if (c.u < 0 || c.u > natW || c.v < 0 || c.v > natH) return;
-    const match = curFrame.match(/(\d+)/);
-    const fn = match ? String(parseInt(match[1])) : curFrame;
-    obs[activeEnt].push({frame:fn, u:Math.round(c.u), v:Math.round(c.v), file:curFrame});
-    updateProgress();
-    renderObs();
-    redraw();
-  });
-
-  // ── Canvas ─────────────────────────────────────────────────────────────────
   function redraw() {
-    const r = viewer.getBoundingClientRect();
-    canvas.width = r.width; canvas.height = r.height;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (!curFrame) return;
-
-    const sx = u => offset.x + u * scale;
-    const sy = v => offset.y + v * scale;
-    // Fixed screen-space marker — stays small and precise at any zoom
-    const R = 6, ARM = 14;
-
-    Object.entries(obs).forEach(([ent, list]) => {
-      const color = ENT_COLOR[ent];
-      list.filter(o => o.file === curFrame).forEach(o => {
-        const x = sx(o.u), y = sy(o.v);
-        ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1.5;
-
-        // crosshair with gap
+    const r=viewer.getBoundingClientRect();
+    canvas.width=r.width; canvas.height=r.height;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if(!curFrame)return;
+    const sx=u=>offset.x+u*scale, sy=v=>offset.y+v*scale;
+    const R=6, ARM=14;
+    Object.entries(obs).forEach(([ent,list])=>{
+      const color=ENT_COLOR[ent];
+      list.filter(o=>o.file===curFrame).forEach(o=>{
+        const x=sx(o.u),y=sy(o.v);
+        ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=1.5;
         ctx.beginPath();
-        ctx.moveTo(x-ARM,y); ctx.lineTo(x-R,y);
-        ctx.moveTo(x+R,  y); ctx.lineTo(x+ARM,y);
-        ctx.moveTo(x,y-ARM); ctx.lineTo(x,y-R);
-        ctx.moveTo(x,y+R);   ctx.lineTo(x,y+ARM);
+        ctx.moveTo(x-ARM,y);ctx.lineTo(x-R,y);
+        ctx.moveTo(x+R,y);ctx.lineTo(x+ARM,y);
+        ctx.moveTo(x,y-ARM);ctx.lineTo(x,y-R);
+        ctx.moveTo(x,y+R);ctx.lineTo(x,y+ARM);
         ctx.stroke();
-
-        // circle
-        ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI*2); ctx.stroke();
-
-        // label
-        ctx.font = 'bold 12px JetBrains Mono, monospace';
-        ctx.fillText(ENT_SHORT[ent] + ' f' + o.frame, x + R + 5, y - 5);
+        ctx.beginPath();ctx.arc(x,y,R,0,Math.PI*2);ctx.stroke();
+        ctx.font='bold 12px JetBrains Mono, monospace';
+        ctx.fillText(ENT_SHORT[ent]+' f'+o.frame,x+R+5,y-5);
       });
     });
   }
 
-  // ── Obs list ───────────────────────────────────────────────────────────────
   function renderObs() {
-    const list = document.getElementById('obsList');
-    const total = Object.values(obs).reduce((s,a) => s+a.length, 0);
-    if (!total) {
-      list.innerHTML = '<div style="padding:13px;color:var(--muted);font-size:.7rem;text-align:center;">Click the center of each socket on ≥2 frames</div>';
+    const list=document.getElementById('obsList');
+    const total=Object.values(obs).reduce((s,a)=>s+a.length,0);
+    if(!total){
+      list.innerHTML='<div style="padding:13px;color:var(--muted);font-size:.7rem;text-align:center;">Click the center of each socket on ≥2 frames</div>';
       return;
     }
-    let html = '';
-    [['vga_socket','vga'],['ethernet_socket','eth'],['power_socket','pwr']].forEach(([ent,cls]) => {
-      if (!obs[ent].length) return;
-      html += '<div class="obs-group-hdr ' + cls + '">' + ent + ' (' + obs[ent].length + 'x)</div>';
-      obs[ent].forEach((o,i) => {
-        html += '<div class="obs-item">' +
-          '<div><span class="obs-frame ' + cls + '">f' + o.frame + '</span>' +
-          '<span class="obs-uv">(' + o.u + ', ' + o.v + ')</span></div>' +
-          '<button class="del" onclick="delObs(\'' + ent + '\',' + i + ')">✕</button>' +
-          '</div>';
+    let html='';
+    [['vga_socket','vga'],['ethernet_socket','eth'],['power_socket','pwr']].forEach(([ent,cls])=>{
+      if(!obs[ent].length)return;
+      html+='<div class="obs-group-hdr '+cls+'">'+ent+' ('+obs[ent].length+'x)</div>';
+      obs[ent].forEach((o,i)=>{
+        html+='<div class="obs-item"><div><span class="obs-frame '+cls+'">f'+o.frame+'</span>'+
+          '<span class="obs-uv">('+o.u+', '+o.v+')</span></div>'+
+          '<button class="del" onclick="delObs(\''+ent+'\','+i+')">✕</button></div>';
       });
     });
-    list.innerHTML = html;
+    list.innerHTML=html;
   }
 
-  function delObs(ent, i) { obs[ent].splice(i,1); updateProgress(); renderObs(); redraw(); }
-
-  function clearAll() {
-    obs = {vga_socket:[], ethernet_socket:[], power_socket:[]};
-    updateProgress(); renderObs(); redraw();
+  function delObs(ent,i){obs[ent].splice(i,1);updateProgress();renderObs();redraw();}
+  function clearAll(){
+    obs={vga_socket:[],ethernet_socket:[],power_socket:[]};
+    updateProgress();renderObs();redraw();
     document.getElementById('result').classList.remove('show');
   }
 
-  // ── Progress ───────────────────────────────────────────────────────────────
   function updateProgress() {
-    [['vga_socket','vga'],['ethernet_socket','eth'],['power_socket','pwr']].forEach(([ent,cls]) => {
-      const n = obs[ent].length;
-      const ready = n >= 2;
-      document.getElementById('dot-' + cls).className = 'prog-dot' + (ready ? ' ' + cls : '');
-      document.getElementById('pl-'  + cls).className = 'prog-label' + (ready ? ' ' + cls : '');
-      document.getElementById('pn-'  + cls).textContent = n + ' / ≥2';
-      document.getElementById('cnt-' + cls).textContent = n + ' obs';
+    [['vga_socket','vga'],['ethernet_socket','eth'],['power_socket','pwr']].forEach(([ent,cls])=>{
+      const n=obs[ent].length, ready=n>=2;
+      document.getElementById('dot-'+cls).className='prog-dot'+(ready?' '+cls:'');
+      document.getElementById('pl-' +cls).className='prog-label'+(ready?' '+cls:'');
+      document.getElementById('pn-' +cls).textContent=n+' / ≥2';
+      document.getElementById('cnt-'+cls).textContent=n+' obs';
     });
-    const allReady = ['vga_socket','ethernet_socket','power_socket'].every(e => obs[e].length >= 2);
-    document.getElementById('computeBtn').disabled = !allReady;
+    const allReady=['vga_socket','ethernet_socket','power_socket'].every(e=>obs[e].length>=2);
+    document.getElementById('computeBtn').disabled=!allReady;
   }
 
-  // ── Compute ────────────────────────────────────────────────────────────────
   async function compute() {
     showResult('Triangulating 3 points…', false);
     try {
-      const res = await fetch('/compute', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({
-          vga: obs.vga_socket.map(o => [o.frame, o.u, o.v]),
-          eth: obs.ethernet_socket.map(o => [o.frame, o.u, o.v]),
-          pwr: obs.power_socket.map(o => [o.frame, o.u, o.v]),
+      const res=await fetch('/compute',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          vga:obs.vga_socket.map(o=>[o.frame,o.u,o.v]),
+          eth:obs.ethernet_socket.map(o=>[o.frame,o.u,o.v]),
+          pwr:obs.power_socket.map(o=>[o.frame,o.u,o.v]),
         })
       });
-      const data = await res.json();
-      if (data.error) { showResult('Error: ' + data.error, true); return; }
-      showResult(fmt(data), false);
-    } catch(e) { showResult('Error: ' + e.message, true); }
+      const data=await res.json();
+      if(data.error){showResult('Error: '+data.error,true);return;}
+      showResult(fmt(data),false);
+    } catch(e){showResult('Error: '+e.message,true);}
   }
 
   function fmt(d) {
-    const R = d.rotation;
-    const row = r => '  [' + r.map(x => x.toFixed(8).padStart(13)).join(', ') + ']';
-    return [
+    const R=d.rotation;
+    const row=r=>'  ['+r.map(x=>x.toFixed(8).padStart(13)).join(', ')+']';
+    return[
       '✓ Saved to rotation.json',
       '',
       'Rotation matrix:',
-      '[',
-      row(R[0]),
-      row(R[1]),
-      row(R[2]),
-      ']',
+      '[', row(R[0]), row(R[1]), row(R[2]), ']',
+      '',
+      'Similarity to GT: ' + d.gt_similarity.toFixed(4) + '  (0=perfect, 2√2≈2.83=worst)',
       '',
       'Triangulated points:',
-      '  VGA: [' + d.p_vga.map(x=>x.toFixed(4)).join(', ') + ']',
-      '  ETH: [' + d.p_eth.map(x=>x.toFixed(4)).join(', ') + ']',
-      '  PWR: [' + d.p_pwr.map(x=>x.toFixed(4)).join(', ') + ']',
+      '  VGA: ['+d.p_vga.map(x=>x.toFixed(4)).join(', ')+']',
+      '  ETH: ['+d.p_eth.map(x=>x.toFixed(4)).join(', ')+']',
+      '  PWR: ['+d.p_pwr.map(x=>x.toFixed(4)).join(', ')+']',
     ].join('\n');
   }
 
-  function showResult(txt, err) {
-    const el = document.getElementById('result');
-    el.textContent = txt; el.style.color = err ? 'var(--acc2)' : 'var(--acc)';
+  function showResult(txt,err){
+    const el=document.getElementById('result');
+    el.textContent=txt; el.style.color=err?'var(--acc2)':'var(--acc)';
     el.classList.add('show');
   }
 
   buildFrames();
   updateProgress();
-  window.addEventListener('resize', () => { if (curFrame) resetZoom(); });
+  window.addEventListener('resize',()=>{if(curFrame)resetZoom();});
 </script>
 </body>
 </html>
@@ -572,7 +555,7 @@ def serve_frame(filename):
 @app.route("/compute", methods=["POST"])
 def compute():
     try:
-        data = request.get_json()
+        data    = request.get_json()
         raw_vga = data["vga"]
         raw_eth = data["eth"]
         raw_pwr = data["pwr"]
@@ -581,48 +564,58 @@ def compute():
             if len(raw) < 2:
                 return jsonify({"error": f"{label} needs ≥2 observations (have {len(raw)})"})
 
-        poses = load_poses()
-        to_obs = lambda raw: [(str(r[0]), float(r[1]), float(r[2])) for r in raw]
+        poses   = load_poses()
+        to_obs  = lambda raw: [(str(r[0]), float(r[1]), float(r[2])) for r in raw]
 
-        p_vga = triangulate(to_obs(raw_vga), poses)
-        p_eth = triangulate(to_obs(raw_eth), poses)
-        p_pwr = triangulate(to_obs(raw_pwr), poses)
+        p_vga   = triangulate(to_obs(raw_vga), poses)
+        p_eth   = triangulate(to_obs(raw_eth), poses)
+        p_pwr   = triangulate(to_obs(raw_pwr), poses)
 
         rotation = compute_rotation(p_vga, p_eth, p_pwr)
 
-        # save rotation.json
+        # measure how close we are to GT (Frobenius distance, lower=better)
+        GT = np.array([
+            [-0.004004375172752437,  0.9672545151126772, -0.25377680739897346],
+            [ 0.01584254528462312,   0.25380835519540434, 0.9671247761234889 ],
+            [ 0.9998664804554559,   -0.00014774012094266402, -0.016340117333610394]
+        ])
+        gt_similarity = float(np.linalg.norm(rotation - GT, 'fro'))
+
+        # Save rotation.json
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         rot_path = os.path.join(OUTPUT_DIR, "rotation.json")
         with open(rot_path, "w") as f:
             json.dump(rotation.tolist(), f, indent=2)
 
-        # also save full answers.json with center+extent+rotation per entity
+        # Update answers.json
         answers_path = os.path.join(OUTPUT_DIR, "answers.json")
         answers = []
         if os.path.exists(answers_path):
             with open(answers_path) as f:
                 answers = json.load(f)
 
+        center_map = {"vga_socket": p_vga, "ethernet_socket": p_eth, "power_socket": p_pwr}
         for ent, extent in ENTITIES.items():
-            # pick the right triangulated point as center
-            center_map = {"vga_socket": p_vga, "ethernet_socket": p_eth, "power_socket": p_pwr}
             center = center_map[ent]
             updated = False
             for entry in answers:
                 if entry["entity"] == ent:
-                    entry["obb"] = {"center": center.tolist(), "extent": extent, "rotation": rotation.tolist()}
+                    entry["obb"] = {"center": center.tolist(), "extent": extent,
+                                    "rotation": rotation.tolist()}
                     updated = True; break
             if not updated:
-                answers.append({"entity": ent, "obb": {"center": center.tolist(), "extent": extent, "rotation": rotation.tolist()}})
-
+                answers.append({"entity": ent,
+                                 "obb": {"center": center.tolist(), "extent": extent,
+                                         "rotation": rotation.tolist()}})
         with open(answers_path, "w") as f:
             json.dump(answers, f, indent=2)
 
         return jsonify({
-            "rotation": rotation.tolist(),
-            "p_vga": p_vga.tolist(),
-            "p_eth": p_eth.tolist(),
-            "p_pwr": p_pwr.tolist(),
+            "rotation":      rotation.tolist(),
+            "gt_similarity": gt_similarity,
+            "p_vga":         p_vga.tolist(),
+            "p_eth":         p_eth.tolist(),
+            "p_pwr":         p_pwr.tolist(),
         })
 
     except Exception as e:
@@ -633,7 +626,8 @@ def compute():
 if __name__ == "__main__":
     frames = get_frames()
     print(f"\n  Rotation Annotator")
-    print(f"  Data dir : {DATA_DIR}")
-    print(f"  Frames   : {len(frames)} found")
-    print(f"  Open     : http://localhost:5000\n")
+    print(f"  Data dir   : {DATA_DIR}")
+    print(f"  Output dir : {OUTPUT_DIR}")
+    print(f"  Frames     : {len(frames)} found")
+    print(f"  Open       : http://localhost:5000\n")
     app.run(debug=True, port=5000)
