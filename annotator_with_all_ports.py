@@ -8,7 +8,10 @@ app = Flask(__name__)
 # ─────────────────────────────────────────────
 # CONFIG — edit these
 # ─────────────────────────────────────────────
-DATA_DIR = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Data"
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR   = os.path.join(BASE_DIR, "Data")
+CAM_DIR    = os.path.join(BASE_DIR, "Camera_Properties")
+ANSWER_DIR = os.path.join(BASE_DIR, "Answers")
 
 ROTATION = np.array([
     [-0.004004375172752437,  0.9672545151126772, -0.25377680739897346],
@@ -26,7 +29,7 @@ EXTENTS = {
     "audio_jack_3_5mm": [0.006,   0.006,   0.005 ],
     "hdmi_port":        [0.0105,  0.0055,  0.006 ],
     "displayport":      [0.0105,  0.0065,  0.006 ],
-    "vga_port":         [0.0155,  0.0075,  0.007 ],
+    "vga_socket":       [0.0155,  0.0075,  0.007 ],
     "dvi_port":         [0.0185,  0.008,   0.007 ],
     # GPU (PCIe card)
     "gpu_hdmi":         [0.0105,  0.0055,  0.006 ],
@@ -46,7 +49,7 @@ ENTITY_COLORS = {
     "audio_jack_3_5mm": (255,  80, 150),
     "hdmi_port":        (255, 220,  50),
     "displayport":      (80,  255, 200),
-    "vga_port":         (255,  80,  80),
+    "vga_socket":         (255,  80,  80),
     "dvi_port":         (200, 160,  80),
     "gpu_hdmi":         (255, 160,  60),
     "gpu_displayport":  (60,  220, 255),
@@ -65,7 +68,7 @@ K = np.array([
 # HELPERS
 # ─────────────────────────────────────────────
 def load_poses():
-    with open(os.path.join(DATA_DIR, "poses.json")) as f:
+    with open(os.path.join(CAM_DIR, "poses.json")) as f:
         return json.load(f)
 
 def triangulate(observations, poses):
@@ -104,7 +107,7 @@ def get_frames():
         return []
 
 def save_answers(entity, center, extent, rotation):
-    path = os.path.join(DATA_DIR, "answers.json")
+    path = os.path.join(ANSWER_DIR, "answers.json")
     answers = []
     if os.path.exists(path):
         with open(path) as f:
@@ -219,9 +222,13 @@ HTML = r"""
   /* modal */
   .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.8); z-index: 100; align-items: center; justify-content: center; }
   .overlay.open { display: flex; }
-  .modal { background: var(--surf); border: 1px solid var(--border); border-radius: 8px; padding: 18px; max-width: 94vw; max-height: 94vh; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+  .modal { background: var(--surf); border: 1px solid var(--border); border-radius: 8px; padding: 18px; max-width: 96vw; max-height: 96vh; display: flex; flex-direction: column; gap: 10px; }
   .modal h2 { font-family: var(--disp); font-size: .95rem; color: var(--acc); }
-  .modal img { max-width: 100%; border-radius: 4px; border: 1px solid var(--border); }
+  .modal-hint { font-size: 0.65rem; color: var(--muted); }
+  .val-viewport { overflow: hidden; position: relative; width: 80vw; height: 70vh; background: #05050a; border: 1px solid var(--border); border-radius: 4px; cursor: crosshair; }
+  .val-viewport img { position: absolute; max-width: none; user-select: none; -webkit-user-drag: none; display: block; }
+  .val-zoom-btns { position: absolute; bottom: 10px; right: 10px; display: flex; gap: 5px; z-index: 10; }
+  .val-zoom-btns .zbtn { background: var(--surf); border: 1px solid var(--border); color: var(--text); width: 30px; height: 30px; border-radius: 4px; cursor: pointer; font-size: .95rem; display: flex; align-items: center; justify-content: center; }
   .modal-close { align-self: flex-end; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 5px 14px; border-radius: 4px; cursor: pointer; font-family: var(--mono); font-size: .75rem; }
   .modal-close:hover { border-color: var(--acc2); color: var(--acc2); }
 
@@ -287,7 +294,15 @@ HTML = r"""
 <div class="overlay" id="overlay">
   <div class="modal">
     <h2>OBB Validation</h2>
-    <img id="valImg" src="" alt="">
+    <div class="modal-hint">scroll = zoom &nbsp;|&nbsp; click+drag = pan &nbsp;|&nbsp; ⊙ = reset</div>
+    <div class="val-viewport" id="valVP">
+      <img id="valImg" src="" alt="">
+      <div class="val-zoom-btns">
+        <button class="zbtn" onclick="valZoom(1.25)">+</button>
+        <button class="zbtn" onclick="valZoom(0.8)">−</button>
+        <button class="zbtn" onclick="valResetZoom()">⊙</button>
+      </div>
+    </div>
     <button class="modal-close" onclick="closeModal()">Close</button>
   </div>
 </div>
@@ -296,7 +311,7 @@ HTML = r"""
   let frames = {{ frames|tojson }};
   let entities = {{ entities|tojson }};
   let ENT_COLOR = {{ colors|tojson }};
-  
+
   // obs[entity] = [{frame, u, v, file}, ...]
   let obs = {};
   entities.forEach(e => obs[e] = []);
@@ -361,7 +376,7 @@ HTML = r"""
     const col = ENT_COLOR[ent];
     hud.textContent = ent;
     // 26 in hex is ~15% opacity
-    hud.style.backgroundColor = col + '26'; 
+    hud.style.backgroundColor = col + '26';
     hud.style.borderColor = col;
     hud.style.color = col;
     redraw();
@@ -440,28 +455,38 @@ HTML = r"""
 
     const cx = u => offset.x + u * scale;
     const cy = v => offset.y + v * scale;
-    const IMG_R   = 12;   
-    const IMG_ARM = 24;   
+
+    // Crosshair sizing:
+    // - Zoomed out: fixed screen-px size so markers stay visible
+    // - Zoomed in:  shrinks to ~1 image-pixel so you see the exact pixel clicked
+    // Take the smaller of (fixed screen size) vs (N image-pixels * scale)
+    const R   = Math.min(10,  0.5 * scale);   // circle radius in screen px
+    const ARM = Math.min(22,  3.5 * scale);   // arm length in screen px
+    const LW  = Math.max(1,   Math.min(1.5, 1.5 / scale));  // line width
 
     Object.entries(obs).forEach(([ent, list]) => {
       const color = ENT_COLOR[ent];
-      // Generate a dynamic shortname (first 3 letters)
       const short = ent.substring(0,3).toUpperCase();
       list.filter(o => o.file === curFrame).forEach(o => {
         const x = cx(o.u), y = cy(o.v);
-        const R   = IMG_R   * scale;
-        const ARM = IMG_ARM * scale;
         ctx.strokeStyle = color; ctx.fillStyle = color;
-        ctx.lineWidth = Math.max(1, 1.5 * scale);
+        ctx.lineWidth = LW;
+        // Arms
         ctx.beginPath();
         ctx.moveTo(x - ARM, y); ctx.lineTo(x - R, y);
         ctx.moveTo(x + R,   y); ctx.lineTo(x + ARM, y);
         ctx.moveTo(x, y - ARM); ctx.lineTo(x, y - R);
         ctx.moveTo(x, y + R);   ctx.lineTo(x, y + ARM);
         ctx.stroke();
-        ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI*2); ctx.stroke();
-        ctx.font = 'bold 12px JetBrains Mono, monospace';
-        ctx.fillText(`${short} (${o.u},${o.v})`, x + R + 5, y - 5);
+        // Circle
+        ctx.beginPath(); ctx.arc(x, y, Math.max(R, 1), 0, Math.PI*2); ctx.stroke();
+        // Solid centre dot when zoomed in enough to matter
+        if (scale > 4) {
+          ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI*2); ctx.fill();
+        }
+        // Label at fixed screen size, offset stays constant
+        ctx.font = 'bold 11px JetBrains Mono, monospace';
+        ctx.fillText(`${short} (${o.u},${o.v})`, x + Math.max(R, 7) + 4, y - 4);
       });
     });
   }
@@ -492,9 +517,9 @@ HTML = r"""
   }
 
   function delObs(ent, i) { obs[ent].splice(i,1); renderObs(); redraw(); }
-  function clearObs() { 
+  function clearObs() {
       entities.forEach(e => obs[e] = []);
-      lastResult={}; renderObs(); redraw(); hideResult(); 
+      lastResult={}; renderObs(); redraw(); hideResult();
   }
 
   // ── Compute ───────────────────────────────────────────────────────────────
@@ -546,7 +571,62 @@ HTML = r"""
     document.getElementById('valImg').src = `/validate?entity=${ent}&frame=${encodeURIComponent(frame)}&t=${Date.now()}`;
     document.getElementById('overlay').classList.add('open');
   }
-  function closeModal() { document.getElementById('overlay').classList.remove('open'); }
+  // ── Validate modal zoom / pan ─────────────────────────────────────────────
+  let vScale = 1, vOff = {x:0,y:0}, vDrag = false, vDragS = {x:0,y:0};
+  let vNatW = 0, vNatH = 0;
+  const vVP  = document.getElementById('valVP');
+  const vImg = document.getElementById('valImg');
+
+  function valApplyT() {
+    vImg.style.left   = vOff.x + 'px';
+    vImg.style.top    = vOff.y + 'px';
+    vImg.style.width  = vNatW * vScale + 'px';
+    vImg.style.height = vNatH * vScale + 'px';
+  }
+  function valZoom(f, cx, cy) {
+    const r = vVP.getBoundingClientRect();
+    cx = cx ?? r.width/2; cy = cy ?? r.height/2;
+    const prev = vScale;
+    vScale = Math.min(Math.max(vScale * f, 0.05), 20);
+    vOff.x = cx - (cx - vOff.x) * (vScale/prev);
+    vOff.y = cy - (cy - vOff.y) * (vScale/prev);
+    valApplyT();
+  }
+  function valResetZoom() {
+    // Fit image to viewport (same logic as annotation resetZoom)
+    const r = vVP.getBoundingClientRect();
+    if (!r.width || !vNatW) { requestAnimationFrame(valResetZoom); return; }
+    vScale = Math.min(r.width / vNatW, r.height / vNatH) * 0.97;
+    vOff.x = (r.width  - vNatW * vScale) / 2;
+    vOff.y = (r.height - vNatH * vScale) / 2;
+    valApplyT();
+  }
+  // When a new validate image loads, capture its natural size and fit it
+  vImg.addEventListener('load', () => {
+    vNatW = vImg.naturalWidth;
+    vNatH = vImg.naturalHeight;
+    valResetZoom();
+  });
+  vVP.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = vVP.getBoundingClientRect();
+    valZoom(e.deltaY < 0 ? 1.15 : 0.87, e.clientX - r.left, e.clientY - r.top);
+  }, {passive: false});
+  vVP.addEventListener('mousedown', e => {
+    vDrag = true; vDragS = {x: e.clientX - vOff.x, y: e.clientY - vOff.y};
+    vVP.style.cursor = 'grabbing'; e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => {
+    if (vDrag) { vOff.x = e.clientX - vDragS.x; vOff.y = e.clientY - vDragS.y; valApplyT(); }
+  });
+  window.addEventListener('mouseup', () => { vDrag = false; vVP.style.cursor = 'crosshair'; });
+
+  function closeModal() {
+    document.getElementById('overlay').classList.remove('open');
+    vScale = 1; vOff = {x:0,y:0}; vNatW = 0; vNatH = 0;
+    vImg.style.left = '0px'; vImg.style.top = '0px';
+    vImg.style.width = ''; vImg.style.height = '';
+  }
 
   // ── Save ──────────────────────────────────────────────────────────────────
   async function saveToFile() {
@@ -611,7 +691,7 @@ def validate():
     entity    = request.args.get("entity", "ethernet_socket")
     frame_raw = request.args.get("frame", "")
 
-    answers_path = os.path.join(DATA_DIR, "answers.json")
+    answers_path = os.path.join(ANSWER_DIR, "answers.json")
     if not os.path.exists(answers_path):
         return "answers.json not found — compute first", 404
 
@@ -659,7 +739,7 @@ def validate():
         draw.ellipse([uc-9, vc-9, uc+9, vc+9], fill=color)
         draw.text((int(uc)+12, int(vc)), entity, fill=color)
 
-    out = pil.resize((1280, 720))
+    out = pil  # serve full resolution so zoom is useful
     buf = io.BytesIO()
     out.save(buf, format="JPEG", quality=90)
     buf.seek(0)
@@ -667,7 +747,7 @@ def validate():
 
 @app.route("/save")
 def save_route():
-    path = os.path.join(DATA_DIR, "answers.json")
+    path = os.path.join(ANSWER_DIR, "answers.json")
     if os.path.exists(path):
         return jsonify({"message": f"✓ answers.json up to date at {path}"})
     return jsonify({"message": "Nothing saved yet — compute first."})
