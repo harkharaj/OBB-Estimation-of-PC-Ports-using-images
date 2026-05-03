@@ -21,7 +21,8 @@ app = Flask(__name__)
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-DATA_DIR   = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Data"
+DATA_DIR   = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Camera_Properties"
+IMAGE_DIR = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Data"
 OUTPUT_DIR = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT"
 
 ROTATION_OLD = np.array([
@@ -99,7 +100,7 @@ def draw_obb(draw, corners, poses, frame_key, color, width=3):
 
 def get_frames():
     try:
-        return sorted([f for f in os.listdir(DATA_DIR)
+        return sorted([f for f in os.listdir(IMAGE_DIR)
                        if f.lower().endswith(".png") and "frame" in f.lower()])
     except:
         return []
@@ -512,7 +513,7 @@ def index():
 
 @app.route("/frame/<path:filename>")
 def serve_frame(filename):
-    path = os.path.join(DATA_DIR, filename)
+    path = os.path.join(IMAGE_DIR, filename)
     if not os.path.exists(path): return f"Not found: {path}", 404
     return send_file(path, mimetype="image/png")
 
@@ -546,9 +547,9 @@ def compare():
         import re
         m = re.search(r'\d+', frame_raw)
         fn = int(m.group()) if m else 0
-        img_path = os.path.join(DATA_DIR, f"frame_{fn:06d}.png")
+        img_path = os.path.join(IMAGE_DIR, f"frame_{fn:06d}.png")
         if not os.path.exists(img_path):
-            img_path = os.path.join(DATA_DIR, f"frame_{fn}.png")
+            img_path = os.path.join(IMAGE_DIR, f"frame_{fn}.png")
 
         pil  = Image.open(img_path).copy()
         draw = ImageDraw.Draw(pil)

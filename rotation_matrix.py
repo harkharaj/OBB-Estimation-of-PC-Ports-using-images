@@ -25,7 +25,8 @@ app = Flask(__name__)
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-DATA_DIR   = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Data"
+PHOTO_DIR   = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Data"
+DATA_DIR   = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Camera_properties"
 OUTPUT_DIR = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT"
 
 K = np.array([
@@ -117,7 +118,7 @@ def project(world_pt, frame_key, poses):
 
 def get_frames():
     try:
-        return sorted([f for f in os.listdir(DATA_DIR)
+        return sorted([f for f in os.listdir(PHOTO_DIR)
                        if f.lower().endswith(".png") and "frame" in f.lower()])
     except:
         return []
@@ -547,7 +548,7 @@ def index():
 
 @app.route("/frame/<path:filename>")
 def serve_frame(filename):
-    path = os.path.join(DATA_DIR, filename)
+    path = os.path.join(PHOTO_DIR, filename)
     if not os.path.exists(path):
         return f"Not found: {path}", 404
     return send_file(path, mimetype="image/png")
