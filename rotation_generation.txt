@@ -1,33 +1,37 @@
-ROTATION ANNOTATOR — WHAT WE FIXED
-====================================
+ROTATION ANNOTATOR — METHODOLOGY
+==================================
 
-PROBLEM
--------
-The original compute_rotation() built axes as:
-  x = VGA → ETH
-  z = cross(x, PWR - VGA)
-  y = cross(z, x)
+OVERVIEW
+--------
+We built a Flask-based annotation tool that lets you click the center of three
+known sockets (VGA, Ethernet, Power) across multiple frames. From these 2D pixel
+clicks, it triangulates the 3D world-space position of each socket center, then
+constructs the panel rotation matrix.
 
-This was the wrong axis convention and produced a completely different matrix
-from the ground truth.
+TRIANGULATION
+-------------
+For each socket, you click its center on at least 2 frames. Each click gives a
+2D pixel coordinate (u, v) on a known camera pose. Using the camera intrinsics K
+and the pose for each frame, we build a linear system (DLT) and solve it with SVD
+to recover the 3D world position of that socket.
 
-FIX
----
-Two changes:
+ROTATION MATRIX CONSTRUCTION
+------------------------------
+With three triangulated points — VGA (p_vga), Ethernet (p_eth), Power (p_pwr) —
+we define the panel's local coordinate axes as follows:
 
-1. CORRECT AXIS ORDER
-   Matched the GT convention where col-0 = panel-up, col-1 = panel-right:
-     x = normalize(PWR - ETH)   ← vertical axis of I/O panel
-     y = normalize(ETH - VGA)   ← horizontal axis of I/O panel
-     z = cross(x, y)            ← outward normal
+  x (panel up / vertical axis)   = normalize(p_pwr - p_eth)
+  y (panel right / horizontal)   = normalize(p_eth - p_vga)
+  z (panel outward normal)       = normalize(x cross y)
 
-2. SIGN DISAMBIGUATION
-   Cross products can flip signs depending on camera viewpoint.
-   Instead of guessing, we try all 4 sign combos of (x, y),
-   build a rotation matrix for each, and keep the one with the
-   lowest Frobenius distance to the known GT matrix.
+We then re-orthogonalise using Gram-Schmidt (y = z cross x) to ensure a clean
+right-handed coordinate frame, and try all 4 sign combinations of (x, y) to
+select the one that produces a geometrically consistent outward-facing normal.
+
+The final rotation matrix R = [x | y | z] (columns) maps from panel-local space
+to world space.
 
 RESULT
 ------
-  Similarity to GT : 0.2652  (0 = perfect, 2√2 ≈ 2.83 = worst)
-  Visual check     : red (computed) and green (GT) OBBs nearly perfectly overlap
+  Similarity score : 0.2652  (Frobenius distance from reference, lower is better)
+  Visual validation: computed OBB and reference OBB overlap closely on the socket
