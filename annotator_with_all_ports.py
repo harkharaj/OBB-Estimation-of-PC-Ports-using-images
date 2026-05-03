@@ -1,18 +1,3 @@
-"""
-socket_annotator.py
--------------------
-Flask tool to click pixel observations for ethernet_socket / power_socket,
-triangulate their 3D centers, and validate the OBB projection on any frame.
-
-Rotation matrix is fixed (VGA_ROTATION). You just click the socket center
-across a few frames, hit Compute, then validate.
-
-Usage:
-    pip install flask numpy pillow
-    python socket_annotator.py
-    Open http://localhost:5000
-"""
-
 from flask import Flask, render_template_string, request, jsonify, send_file
 import json, os, io
 import numpy as np
@@ -32,8 +17,42 @@ ROTATION = np.array([
 ])
 
 EXTENTS = {
-    "ethernet_socket": [0.008,  0.0065, 0.0055],
-    "power_socket":    [0.014,  0.011,  0.0075],
+    # Motherboard I/O
+    "ethernet_socket":  [0.008,   0.0065,  0.0055],
+    "power_socket":     [0.014,   0.011,   0.0075],
+    "usb2_port":        [0.007,   0.0065,  0.006 ],
+    "usb3_port":        [0.007,   0.008,   0.006 ],
+    "ps2_port":         [0.0075,  0.0075,  0.005 ],
+    "audio_jack_3_5mm": [0.006,   0.006,   0.005 ],
+    "hdmi_port":        [0.0105,  0.0055,  0.006 ],
+    "displayport":      [0.0105,  0.0065,  0.006 ],
+    "vga_port":         [0.0155,  0.0075,  0.007 ],
+    "dvi_port":         [0.0185,  0.008,   0.007 ],
+    # GPU (PCIe card)
+    "gpu_hdmi":         [0.0105,  0.0055,  0.006 ],
+    "gpu_displayport":  [0.0105,  0.0065,  0.006 ],
+    # Expansion / misc
+    "pcie_slot_bracket":[0.0025,  0.055,   0.001 ],
+    "rear_fan_120mm":   [0.060,   0.060,   0.0125],
+    "rear_fan_80mm":    [0.040,   0.040,   0.0125],
+}
+
+ENTITY_COLORS = {
+    "ethernet_socket":  (60,  143, 255),
+    "power_socket":     (255, 179,  71),
+    "usb2_port":        (0,   220, 130),
+    "usb3_port":        (0,   180, 255),
+    "ps2_port":         (200, 100, 255),
+    "audio_jack_3_5mm": (255,  80, 150),
+    "hdmi_port":        (255, 220,  50),
+    "displayport":      (80,  255, 200),
+    "vga_port":         (255,  80,  80),
+    "dvi_port":         (200, 160,  80),
+    "gpu_hdmi":         (255, 160,  60),
+    "gpu_displayport":  (60,  220, 255),
+    "pcie_slot_bracket":(160, 160, 160),
+    "rear_fan_120mm":   (100, 220, 100),
+    "rear_fan_80mm":    ( 80, 180,  80),
 }
 
 K = np.array([
@@ -117,7 +136,6 @@ HTML = r"""
     --acc:     #00ff9d;
     --acc2:    #ff3c6e;
     --acc3:    #3c8fff;
-    --acc4:    #ffb347;
     --text:    #e0e0f0;
     --muted:   #555570;
     --mono:    'JetBrains Mono', monospace;
@@ -160,9 +178,7 @@ HTML = r"""
   #canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
   .hud { position: absolute; top: 11px; left: 11px; background: rgba(10,10,15,.88); border: 1px solid var(--border); border-radius: 4px; padding: 5px 11px; font-size: 0.7rem; color: var(--muted); pointer-events: none; z-index: 10; }
   .hud span { color: var(--acc); }
-  .ent-hud { position: absolute; top: 11px; right: 11px; border-radius: 4px; padding: 6px 14px; font-size: 0.74rem; font-weight: 700; letter-spacing: 1px; pointer-events: none; z-index: 10; }
-  .ent-hud.eth { background: rgba(60,143,255,.15); border: 1px solid var(--acc3); color: var(--acc3); }
-  .ent-hud.pwr { background: rgba(255,179,71,.15); border: 1px solid var(--acc4); color: var(--acc4); }
+  .ent-hud { position: absolute; top: 11px; right: 11px; border-radius: 4px; padding: 6px 14px; font-size: 0.74rem; font-weight: 700; letter-spacing: 1px; pointer-events: none; z-index: 10; border: 1px solid transparent; }
   .no-img { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: .85rem; pointer-events: none; }
   .zoom-btns { position: absolute; bottom: 14px; right: 14px; display: flex; gap: 5px; z-index: 10; }
   .zbtn { background: var(--surf); border: 1px solid var(--border); color: var(--text); width: 32px; height: 32px; border-radius: 4px; cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center; transition: all .15s; }
@@ -172,13 +188,9 @@ HTML = r"""
   .right { background: var(--surf); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
   .obs-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 3px; }
   .obs-group-hdr { font-size: 0.6rem; letter-spacing: 1.5px; text-transform: uppercase; padding: 8px 4px 3px; border-bottom: 1px solid var(--border); margin-bottom: 2px; }
-  .obs-group-hdr.eth { color: var(--acc3); }
-  .obs-group-hdr.pwr { color: var(--acc4); }
   .obs-item { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 0.7rem; display: flex; justify-content: space-between; align-items: center; animation: fi .18s ease; }
   @keyframes fi { from { opacity:0; transform:translateY(-3px); } to { opacity:1; transform:none; } }
   .obs-frame { font-weight: 700; }
-  .obs-frame.eth { color: var(--acc3); }
-  .obs-frame.pwr { color: var(--acc4); }
   .obs-uv { color: var(--muted); font-size: 0.65rem; margin-left: 6px; }
   .del { background: none; border: none; color: var(--acc2); cursor: pointer; font-size: .78rem; opacity: .4; transition: opacity .15s; padding: 0 3px; }
   .del:hover { opacity: 1; }
@@ -234,8 +246,7 @@ HTML = r"""
     <div class="entity-bar">
       <div class="lbl">Active Entity</div>
       <select class="ent-sel" id="entSel" onchange="onEntityChange()">
-        <option value="ethernet_socket">ethernet_socket</option>
-        <option value="power_socket">power_socket</option>
+        <!-- Filled dynamically -->
       </select>
     </div>
   </div>
@@ -246,7 +257,7 @@ HTML = r"""
     <img id="main-img" src="" alt="" style="display:none;">
     <canvas id="canvas"></canvas>
     <div class="hud">cursor: <span id="hx">—</span>, <span id="hy">—</span> &nbsp;|&nbsp; zoom: <span id="hz">1.0</span>x</div>
-    <div class="ent-hud eth" id="entHud">ethernet_socket</div>
+    <div class="ent-hud" id="entHud"></div>
     <div class="zoom-btns">
       <button class="zbtn" onclick="zoom(1.25)">+</button>
       <button class="zbtn" onclick="zoom(0.8)">−</button>
@@ -283,8 +294,13 @@ HTML = r"""
 
 <script>
   let frames = {{ frames|tojson }};
+  let entities = {{ entities|tojson }};
+  let ENT_COLOR = {{ colors|tojson }};
+  
   // obs[entity] = [{frame, u, v, file}, ...]
-  let obs = { ethernet_socket: [], power_socket: [] };
+  let obs = {};
+  entities.forEach(e => obs[e] = []);
+
   let lastResult = {};   // entity -> computed data
   let curFrame = null;
   let scale = 1, offset = {x:0, y:0};
@@ -295,10 +311,8 @@ HTML = r"""
   const img    = document.getElementById('main-img');
   const canvas = document.getElementById('canvas');
   const ctx    = canvas.getContext('2d');
-  const ENT_COLOR = { ethernet_socket: '#3c8fff', power_socket: '#ffb347' };
-  const ENT_SHORT = { ethernet_socket: 'ETH', power_socket: 'PWR' };
 
-  // ── Frame list ────────────────────────────────────────────────────────────
+  // ── Frame & Entity list ───────────────────────────────────────────────────
   function buildFrames() {
     const list = document.getElementById('frameList');
     const fc   = document.getElementById('fc');
@@ -319,6 +333,14 @@ HTML = r"""
       o.value = f; o.textContent = f;
       vf.appendChild(o);
     });
+
+    const entSel = document.getElementById('entSel');
+    entities.forEach(e => {
+        const opt = document.createElement('option');
+        opt.value = e; opt.textContent = e;
+        entSel.appendChild(opt);
+    });
+    onEntityChange(); // setup initial styling
   }
 
   function loadFrame(f) {
@@ -336,8 +358,12 @@ HTML = r"""
   function onEntityChange() {
     const ent = document.getElementById('entSel').value;
     const hud = document.getElementById('entHud');
+    const col = ENT_COLOR[ent];
     hud.textContent = ent;
-    hud.className   = 'ent-hud ' + (ent === 'ethernet_socket' ? 'eth' : 'pwr');
+    // 26 in hex is ~15% opacity
+    hud.style.backgroundColor = col + '26'; 
+    hud.style.borderColor = col;
+    hud.style.color = col;
     redraw();
   }
 
@@ -414,14 +440,13 @@ HTML = r"""
 
     const cx = u => offset.x + u * scale;
     const cy = v => offset.y + v * scale;
-    // Marker size: fixed in image-space (20px at scale=1), so it
-    // stays proportional to the image — same spot, same visual weight.
-    const IMG_R   = 12;   // circle radius in image pixels
-    const IMG_ARM = 24;   // crosshair arm in image pixels
+    const IMG_R   = 12;   
+    const IMG_ARM = 24;   
 
     Object.entries(obs).forEach(([ent, list]) => {
       const color = ENT_COLOR[ent];
-      const short = ENT_SHORT[ent];
+      // Generate a dynamic shortname (first 3 letters)
+      const short = ent.substring(0,3).toUpperCase();
       list.filter(o => o.file === curFrame).forEach(o => {
         const x = cx(o.u), y = cy(o.v);
         const R   = IMG_R   * scale;
@@ -435,7 +460,6 @@ HTML = r"""
         ctx.moveTo(x, y + R);   ctx.lineTo(x, y + ARM);
         ctx.stroke();
         ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI*2); ctx.stroke();
-        // Label stays fixed screen size so it's always readable
         ctx.font = 'bold 12px JetBrains Mono, monospace';
         ctx.fillText(`${short} (${o.u},${o.v})`, x + R + 5, y - 5);
       });
@@ -445,18 +469,21 @@ HTML = r"""
   // ── Obs list ──────────────────────────────────────────────────────────────
   function renderObs() {
     const list = document.getElementById('obsList');
-    const total = obs.ethernet_socket.length + obs.power_socket.length;
+    let total = 0;
+    Object.values(obs).forEach(arr => total += arr.length);
+
     if (!total) {
       list.innerHTML = '<div style="padding:14px;color:var(--muted);font-size:.73rem;text-align:center;">Click the socket center on ≥2 frames</div>';
       return;
     }
     let html = '';
-    [['ethernet_socket','eth'],['power_socket','pwr']].forEach(([ent, cls]) => {
-      if (!obs[ent].length) return;
-      html += `<div class="obs-group-hdr ${cls}">${ent} (${obs[ent].length}×)</div>`;
+    entities.forEach(ent => {
+      if (!obs[ent] || !obs[ent].length) return;
+      const col = ENT_COLOR[ent];
+      html += `<div class="obs-group-hdr" style="color:${col};">${ent} (${obs[ent].length}×)</div>`;
       obs[ent].forEach((o,i) => {
         html += `<div class="obs-item">
-          <div><span class="obs-frame ${cls}">f${o.frame}</span><span class="obs-uv">(${o.u}, ${o.v})</span></div>
+          <div><span class="obs-frame" style="color:${col};">f${o.frame}</span><span class="obs-uv">(${o.u}, ${o.v})</span></div>
           <button class="del" onclick="delObs('${ent}',${i})">✕</button>
         </div>`;
       });
@@ -465,7 +492,10 @@ HTML = r"""
   }
 
   function delObs(ent, i) { obs[ent].splice(i,1); renderObs(); redraw(); }
-  function clearObs() { obs = {ethernet_socket:[], power_socket:[]}; lastResult={}; renderObs(); redraw(); hideResult(); }
+  function clearObs() { 
+      entities.forEach(e => obs[e] = []);
+      lastResult={}; renderObs(); redraw(); hideResult(); 
+  }
 
   // ── Compute ───────────────────────────────────────────────────────────────
   async function compute() {
@@ -537,7 +567,9 @@ HTML = r"""
 # ─────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template_string(HTML, frames=get_frames())
+    # Convert RGB tuples into Hex for the frontend CSS
+    hex_colors = {k: f"#{r:02x}{g:02x}{b:02x}" for k, (r, g, b) in ENTITY_COLORS.items()}
+    return render_template_string(HTML, frames=get_frames(), entities=list(EXTENTS.keys()), colors=hex_colors)
 
 @app.route("/frame/<path:filename>")
 def serve_frame(filename):
@@ -616,7 +648,7 @@ def validate():
         return (int(x[0]/x[2]), int(x[1]/x[2]))
 
     pts   = [proj2d(c) for c in corners]
-    color = (60, 143, 255) if entity == "ethernet_socket" else (255, 179, 71)
+    color = ENTITY_COLORS.get(entity, (255, 255, 255))
     edges = [(0,1),(1,3),(3,2),(2,0),(4,5),(5,7),(7,6),(6,4),(0,4),(1,5),(2,6),(3,7)]
     for p1, p2 in edges:
         draw.line([pts[p1], pts[p2]], fill=color, width=3)
@@ -646,5 +678,6 @@ if __name__ == "__main__":
     print(f"\n  Socket Annotator")
     print(f"  Data dir : {DATA_DIR}")
     print(f"  Frames   : {len(frames)} found")
+    print(f"  Entities : {len(EXTENTS)} configured")
     print(f"  Open     : http://localhost:5000\n")
     app.run(debug=True, port=5000)
