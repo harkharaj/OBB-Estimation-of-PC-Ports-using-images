@@ -675,7 +675,8 @@ def compute():
         else:
             _match = None
         extent = _match if _match else EXTENTS.get(entity, [0.008, 0.0065, 0.0055])
-        extent = [extent[0]*2, extent[1]*2, extent[2]]
+        extent = EXTENTS.get(entity, [0.008, 0.0065, 0.0055])
+        extent_to_save = [extent[0]*2, extent[1]*2, extent[2]]
 
         # reprojection errors
         reproj = []
@@ -684,7 +685,7 @@ def compute():
             if up is not None:
                 reproj.append({"frame": fk, "error": float(np.sqrt((up-u_obs)**2 + (vp-v_obs)**2))})
 
-        save_answers(entity, center.tolist(), extent, ROTATION.tolist())
+        save_answers(entity, center.tolist(), extent_to_save, ROTATION.tolist())
         return jsonify({"entity": entity, "center": center.tolist(), "extent": extent,
                         "rotation": ROTATION.tolist(), "reprojection": reproj})
     except Exception as e:
@@ -707,7 +708,7 @@ def validate():
         return f"No OBB for {entity}", 404
 
     center   = np.array(obb["center"])
-    extent   = obb["extent"]
+    extent   = [obb["extent"][0]/2, obb["extent"][1]/2, obb["extent"][2]]
     rotation = np.array(obb["rotation"])
     corners  = get_corners(center, extent, rotation)
 
