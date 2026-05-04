@@ -25,9 +25,10 @@ app = Flask(__name__)
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-PHOTO_DIR   = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Data"
-DATA_DIR   = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Camera_properties"
-OUTPUT_DIR = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT"
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+PHOTO_DIR  = os.path.join(BASE_DIR, "..", "Data")
+DATA_DIR   = os.path.join(BASE_DIR, "..", "Camera_Properties")
+OUTPUT_DIR = os.path.join(BASE_DIR, "..", "Rotation")
 
 K = np.array([
     [1477.00974684544,   0.0,              1298.2501500778505],
@@ -586,30 +587,7 @@ def compute():
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         rot_path = os.path.join(OUTPUT_DIR, "rotation.json")
         with open(rot_path, "w") as f:
-            json.dump(rotation.tolist(), f, indent=2)
-
-        # Update answers.json
-        answers_path = os.path.join(OUTPUT_DIR, "answers.json")
-        answers = []
-        if os.path.exists(answers_path):
-            with open(answers_path) as f:
-                answers = json.load(f)
-
-        center_map = {"vga_socket": p_vga, "ethernet_socket": p_eth, "power_socket": p_pwr}
-        for ent, extent in ENTITIES.items():
-            center = center_map[ent]
-            updated = False
-            for entry in answers:
-                if entry["entity"] == ent:
-                    entry["obb"] = {"center": center.tolist(), "extent": extent,
-                                    "rotation": rotation.tolist()}
-                    updated = True; break
-            if not updated:
-                answers.append({"entity": ent,
-                                 "obb": {"center": center.tolist(), "extent": extent,
-                                         "rotation": rotation.tolist()}})
-        with open(answers_path, "w") as f:
-            json.dump(answers, f, indent=2)
+            json.dump({"rotation": rotation.tolist()}, f, indent=2)
 
         return jsonify({
             "rotation":      rotation.tolist(),

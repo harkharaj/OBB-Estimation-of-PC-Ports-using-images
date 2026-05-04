@@ -8,28 +8,14 @@ app = Flask(__name__)
 # ─────────────────────────────────────────────
 # CONFIG — edit these
 # ─────────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR   = os.path.join(BASE_DIR, "Data")
 CAM_DIR    = os.path.join(BASE_DIR, "Camera_Properties")
 ANSWER_DIR = os.path.join(BASE_DIR, "Answers")
+Rot_path = os.path.join(BASE_DIR, "Rotation", "rotation.json")
 
-ROTATION = np.array([
-        [
-          -0.004004375172752437,
-          0.9672545151126772,
-          -0.25377680739897346
-        ],
-        [
-          0.01584254528462312,
-          0.25380835519540434,
-          0.9671247761234889
-        ],
-        [
-          0.9998664804554559,
-          -0.00014774012094266402,
-          -0.016340117333610394
-        ]
-      ])
+
+ROTATION  = np.array(json.load(open(Rot_path))["rotation"])
 
 EXTENTS = {
     # Motherboard I/O
@@ -682,7 +668,14 @@ def compute():
         obs = [(str(r[0]), float(r[1]), float(r[2])) for r in raw]
         poses  = load_poses()
         center = triangulate(obs, poses)
-        extent = EXTENTS.get(entity, [0.008, 0.0065, 0.0055])
+        _ans_path = os.path.join(ANSWER_DIR, "answers.json")
+        if os.path.exists(_ans_path):
+            _saved = json.load(open(_ans_path))
+            _match = next((a["obb"]["extent"] for a in _saved if a["entity"] == entity), None)
+        else:
+            _match = None
+        extent = _match if _match else EXTENTS.get(entity, [0.008, 0.0065, 0.0055])
+        extent = [extent[0]*2, extent[1]*2, extent[2]]
 
         # reprojection errors
         reproj = []

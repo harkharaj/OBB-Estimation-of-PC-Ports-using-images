@@ -3,7 +3,7 @@ import numpy as np
 import os
 import cv2
 
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CAM_DIR    = os.path.join(BASE_DIR, "Camera_Properties")
 ANSWER_DIR = os.path.join(BASE_DIR, "Answers")
 DATA_DIR   = os.path.join(BASE_DIR, "Data")
@@ -122,7 +122,10 @@ def draw_and_show(frame_key, pred_pts, gt_pts):
         key = cv2.waitKey(20) & 0xFF
         if key in (ord('q'), ord('Q'), 27):
             break
+        if cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
+            break
     cv2.destroyAllWindows()
+    cv2.waitKey(1)
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 entity = "vga_socket"

@@ -21,9 +21,10 @@ app = Flask(__name__)
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-DATA_DIR   = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Camera_Properties"
-IMAGE_DIR = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT\Data"
-OUTPUT_DIR = r"C:\Users\harkh\OneDrive\Desktop\ROBOTIC_PERCEPTION_FINAL_PROJECT"
+BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR   = os.path.join(BASE_DIR, "Camera_Properties")
+IMAGE_DIR  = os.path.join(BASE_DIR, "Data")
+OUTPUT_DIR = os.path.join(BASE_DIR, "Compare_obb")
 
 ROTATION_OLD = np.array([
     [-0.004004375172752437,  0.9672545151126772, -0.25377680739897346],
@@ -51,11 +52,11 @@ def load_poses():
         return json.load(f)
 
 def load_new_rotation():
-    path = os.path.join(OUTPUT_DIR, "rotation.json")
+    path = os.path.join(BASE_DIR, "Rotation", "rotation.json")
     if not os.path.exists(path):
         return None, f"rotation.json not found at {path}"
     with open(path) as f:
-        return np.array(json.load(f)), None
+        return np.array(json.load(f)["rotation"]), None
 
 def triangulate(observations, poses):
     A = []
